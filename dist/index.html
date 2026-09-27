@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#253c9a"><meta name="description" content="Myself 个人时间规划与记忆工作台。为工作、关系、健康和自己安排时间。">
+  <title>Myself · 我的时间，我的节奏</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%234060e8'/%3E%3Cpath d='M14 44V22h7l11 13 11-13h7v22h-8V33L32 45 22 33v11z' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css"><script type="module" src="app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">跳到主要内容</a>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#today" aria-label="Myself 首页"><span class="brand-mark">m</span><span>myself<span class="brand-period">.</span></span></a>
+      <div class="workspace-label">我的生活工作台</div>
+      <nav aria-label="主要导航" id="navigation">
+        <button data-view="today" class="nav-item active"><span data-icon="calendar"></span>今日安排<span class="nav-count" id="nav-count">0</span></button>
+        <button data-view="memory" class="nav-item"><span data-icon="layers"></span>记忆空间</button>
+        <button data-view="roles" class="nav-item"><span data-icon="circles"></span>生活角色</button>
+        <button data-view="settings" class="nav-item"><span data-icon="sliders"></span>偏好设置</button>
+      </nav>
+      <div class="sidebar-note"><span data-icon="sparkles"></span><p>做重要的事。<br>也给自己留一点空白。</p><div class="note-line"></div></div>
+      <div class="sidebar-bottom"><span class="avatar">M</span><div><strong>我的空间</strong><span>数据保存在当前浏览器</span></div><span data-icon="lock"></span></div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar"><div class="breadcrumbs">我的空间 <span>/</span> <strong id="breadcrumb">今日安排</strong></div><div class="topbar-actions"><button class="search-trigger" id="search-open"><span data-icon="search"></span><span>搜索任务与记忆</span><kbd>⌘ K</kbd></button><span class="local-badge"><span data-icon="shield"></span>本地保存</span></div></header>
+      <main id="main" tabindex="-1"></main>
+      <footer>myself <span>·</span> 给重要的事留出时间</footer>
+    </div>
+  </div>
+  <dialog id="task-dialog" class="modal"><form id="task-form"><div class="modal-head"><div><span class="eyebrow">MAKE ROOM FOR IT</span><h2 id="task-dialog-title">留出一段时间</h2></div><button type="button" class="icon-button" data-close="task-dialog" aria-label="关闭"><span data-icon="x"></span></button></div><input name="id" type="hidden"><label>想做什么<input name="title" required maxlength="160" placeholder="一件具体、可以完成的事" autocomplete="off"></label><div class="form-grid"><label>属于生活的哪一面<select name="role" id="task-role"></select></label><label>预计需要（分钟）<input name="duration" type="number" min="5" max="240" step="1" required value="30"></label><label>安排日期<input name="date" type="date" required></label><label>重要程度<select name="priority"><option value="3">优先处理</option><option value="2" selected>正常安排</option><option value="1">有空再做</option></select></label></div><label class="check-label"><input type="checkbox" id="fixed-time-toggle">在固定时间开始</label><label id="fixed-time-field" hidden>开始时间<input name="time" type="time"></label><label>给自己的一点提示 <span class="optional">可选</span><textarea name="notes" rows="3" maxlength="1000" placeholder="从哪里继续？做到什么程度就可以停下？"></textarea></label><p class="form-error" id="task-error" role="alert"></p><div class="modal-foot"><button class="button danger-text" type="button" id="task-delete" hidden>删除任务</button><div class="spacer"></div><button type="button" class="button secondary" data-close="task-dialog">取消</button><button type="submit" class="button primary">保存安排<span data-icon="arrow-right"></span></button></div></form></dialog>
+  <dialog id="memory-dialog" class="modal"><form id="memory-form"><div class="modal-head"><div><span class="eyebrow">KEEP WHAT MATTERS</span><h2 id="memory-dialog-title">记住这件事</h2></div><button type="button" class="icon-button" data-close="memory-dialog" aria-label="关闭"><span data-icon="x"></span></button></div><input name="id" type="hidden"><label>标题<input name="title" required maxlength="160" placeholder="用一句话概括"></label><label>内容<textarea name="content" rows="5" required maxlength="4000" placeholder="一个偏好、一件事实，或值得留下的想法"></textarea></label><div class="form-grid"><label>记忆类型<select name="type"><option value="fact">事实与进展</option><option value="preference">个人偏好</option><option value="insight">想法与心得</option></select></label><label>生活角色<select name="role" id="memory-role"></select></label></div><label>信息来源<input name="source" maxlength="160" placeholder="我的记录、会议笔记……" value="我的记录"></label><p class="form-error" id="memory-error" role="alert"></p><div class="modal-foot"><button type="button" class="button danger-text" id="memory-delete" hidden>删除记忆</button><div class="spacer"></div><button type="button" class="button secondary" data-close="memory-dialog">取消</button><button type="submit" class="button primary">保存记忆</button></div></form></dialog>
+  <dialog id="search-dialog" class="modal search-modal"><div class="search-input-wrap"><span data-icon="search"></span><input id="global-search" placeholder="搜索任务、记录和想法" aria-label="搜索任务与记忆" autocomplete="off"><button class="icon-button" data-close="search-dialog" aria-label="关闭搜索"><span data-icon="x"></span></button></div><div id="search-results"></div></dialog>
+  <dialog id="confirm-dialog" class="modal confirm-modal"><h2 id="confirm-title"></h2><p id="confirm-message"></p><div class="modal-foot"><button class="button secondary" id="confirm-cancel">取消</button><button class="button primary" id="confirm-yes">确认</button></div></dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <noscript><p class="noscript">请启用 JavaScript，以使用任务安排和本地记忆功能。</p></noscript>
+</body>
+</html>

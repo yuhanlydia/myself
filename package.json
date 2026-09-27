@@ -1,0 +1,8 @@
+{
+  "name": "myself-daily",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first personal planning and memory website",
+  "scripts": {"test":"node --test tests/core.test.mjs","check":"node --check dist/app.js && node --check dist/core.mjs"}
+}

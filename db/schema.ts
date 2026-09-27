@@ -1,0 +1,3 @@
+import { sqliteTable, text, integer, primaryKey, index } from 'drizzle-orm/sqlite-core';
+export const records=sqliteTable('records',{owner:text('owner').notNull(),id:text('id').notNull(),kind:text('kind').notNull(),data:text('data').notNull(),createdAt:text('created_at').notNull(),updatedAt:text('updated_at').notNull(),revision:integer('revision').notNull().default(1)},t=>[primaryKey({columns:[t.owner,t.id]}),index('idx_records_owner_kind').on(t.owner,t.kind)]);
+export const requests=sqliteTable('chat_requests',{owner:text('owner').notNull(),id:text('id').notNull(),createdAt:integer('created_at').notNull()},t=>[primaryKey({columns:[t.owner,t.id]}),index('idx_chat_requests_owner_time').on(t.owner,t.createdAt)]);

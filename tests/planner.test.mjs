@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {defaultState,emptyState,planDay,sanitizeState,validateTask,validatePrefs,dateKey,shiftDate,applyTask,nextTask} from '../dist/core.mjs';
+import {defaultState,emptyState,planDay,sanitizeState,validateTask,validatePrefs,dateKey,shiftDate,applyTask,nextTask} from '../lib/planner.mjs';
 const now=new Date(2026,8,28,8,0), date=dateKey(now), prefs={...emptyState(now).prefs,end:'18:00'};
 const task=(id,extra={})=>({id,title:'Task '+id,date,role:'work',priority:2,duration:60,time:'',done:false,notes:'',createdAt:now.toISOString(),...extra});
 test('fixed appointments stay fixed and flexible tasks do not overlap them',()=>{

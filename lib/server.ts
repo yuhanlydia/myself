@@ -1,7 +1,7 @@
 import {env} from 'cloudflare:workers';
 import {z} from 'zod';
 import {protectSchedule} from './schedule';
-import {chatInput,day,photoType,parseRecord,recordInput,replySchema,replyJsonSchema,type Entry,type Kind} from './domain';
+import {chatInput,day,photoType,parseRecord,recordInput,replySchema,replyJsonSchema,taskSchema,type Entry,type Kind} from './domain';
 const environment=()=>env as unknown as {DB:D1Database;BUCKET:R2Bucket;OPENAI_API_KEY?:string;OPENAI_MODEL?:string};
 export class HttpError extends Error{constructor(public status:number,message:string){super(message);}}
 const json=(data:unknown,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
@@ -13,6 +13,25 @@ async function one(owner:string,id:string){const r=await environment().DB.prepar
 async function put(owner:string,id:string,kind:Kind,data:Record<string,any>,revision?:number){const current=await one(owner,id);if(current&&current.kind!==kind)throw new HttpError(409,'记录类型不匹配');if(revision!==undefined&&revision!==(current?.revision||0))throw new HttpError(409,'这条记录在另一个页面更新了，请刷新后再试');const now=new Date().toISOString(),n=(current?.revision||0)+1;if(current){const out=await environment().DB.prepare('UPDATE records SET data = ?, updated_at = ?, revision = ? WHERE owner = ? AND id = ? AND revision = ?').bind(JSON.stringify(data),now,n,owner,id,current.revision).run();if(!out.meta.changes)throw new HttpError(409,'记录同时被修改，请刷新后再试');}else{await environment().DB.prepare('INSERT INTO records (owner, id, kind, data, created_at, updated_at, revision) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(owner,id,kind,JSON.stringify(data),now,now,n).run();}return {id,kind,data,createdAt:current?.createdAt||now,updatedAt:now,revision:n};}
 async function prefix(owner:string){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(owner));return [...new Uint8Array(b)].map(v=>v.toString(16).padStart(2,'0')).join('')+'/';}
 const publicEntry=(entry:Entry)=>entry.kind==='photo'?{...entry,data:{date:entry.data.date,note:entry.data.note,type:entry.data.type,size:entry.data.size}}:entry;
+// D1 batches are transactional. Stable IDs make a retried browser-tool call safe.
+async function insertOnce(owner:string,entries:{id:string;kind:Kind;data:Record<string,any>}[]){
+ const now=new Date().toISOString();
+ await environment().DB.batch(entries.map(r=>environment().DB.prepare('INSERT OR IGNORE INTO records (owner, id, kind, data, created_at, updated_at, revision) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(owner,r.id,r.kind,JSON.stringify(r.data),now,now,1)));
+ return Promise.all(entries.map(async r=>publicEntry((await one(owner,r.id))!)));
+}
+async function assistantTasks(owner:string,value:unknown){
+ const input=z.object({requestId:z.string().uuid(),tasks:z.array(taskSchema).min(1).max(8)}).strict().parse(value);
+ const entries=await all(owner),base='chatgpt-task:'+input.requestId+':';
+ const existing=entries.filter(r=>!r.id.startsWith(base));
+ const tasks=protectSchedule(input.tasks,existing,entries.find(r=>r.kind==='profile')?.data);
+ const records=await insertOnce(owner,tasks.map((data,i)=>({id:base+i,kind:'task',data})));
+ return {records};
+}
+async function assistantExchange(owner:string,value:unknown){
+ const input=z.object({requestId:z.string().uuid(),userText:z.string().trim().min(1).max(6000),assistantText:z.string().trim().min(1).max(12000)}).strict().parse(value);
+ const records=await insertOnce(owner,[{id:'chatgpt-user:'+input.requestId,kind:'message',data:{role:'user',text:input.userText,photoIds:[],source:'ChatGPT'}},{id:'chatgpt-reply:'+input.requestId,kind:'message',data:{role:'assistant',text:input.assistantText,photoIds:[],source:'ChatGPT'}}]);
+ return {records};
+}
 async function remove(owner:string,id:string){const record=await one(owner,id);if(!record)throw new HttpError(404,'这条记录已经不存在');if(record.kind==='photo'){await environment().BUCKET.delete(record.data.key);const messages=(await all(owner)).filter(r=>r.kind==='message'&&r.data.photoIds?.includes(id));for(const m of messages)await put(owner,m.id,'message',{...m.data,photoIds:m.data.photoIds.filter((v:string)=>v!==id)});}await environment().DB.prepare('DELETE FROM records WHERE owner = ? AND id = ?').bind(owner,id).run();}
 async function upstream(url:string,headers:Record<string,string>={}){const r=await fetch(url,{headers,signal:AbortSignal.timeout(18000)});if(!r.ok)throw new HttpError(r.status===429?429:502,r.status===404?'没有找到这个账号':r.status===403||r.status===429?'对方服务暂时限制了访问，请稍后再试':'外部服务暂时不可用');return r.json() as Promise<any>;}
 async function sync(owner:string,data:any){const provider=z.enum(['github','huggingface']).parse(data.provider),username=z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,38}$/).parse(data.username);let items:any[]=[];if(provider==='github'){const headers={'Accept':'application/vnd.github+json','User-Agent':'Myself-Growth-Assistant','X-GitHub-Api-Version':'2022-11-28'};await upstream('https://api.github.com/users/'+encodeURIComponent(username),headers);const events=await upstream(`https://api.github.com/users/${encodeURIComponent(username)}/events/public?per_page=30`,headers);items=events.map((e:any)=>({externalId:e.id,title:({PushEvent:'更新代码',CreateEvent:'创建项目内容',PullRequestEvent:'更新 Pull Request',IssuesEvent:'更新 Issue',ReleaseEvent:'发布版本'} as any)[e.type]||'公开活动',detail:String(e.repo?.name||''),date:e.created_at,url:`https://github.com/${String(e.repo?.name||'').split('/').map(encodeURIComponent).join('/')}`}));}else{const results=await Promise.all(['models','datasets','spaces'].map(async type=>{const rows=await upstream(`https://huggingface.co/api/${type}?author=${encodeURIComponent(username)}&sort=lastModified&direction=-1&limit=10`);return rows.map((r:any)=>({externalId:type+':'+r.id,title:({models:'模型更新',datasets:'数据集更新',spaces:'Space 更新'} as any)[type],detail:String(r.id),date:r.lastModified||r.createdAt||null,url:`https://huggingface.co/${type==='models'?'':type+'/'}${String(r.id).split('/').map(encodeURIComponent).join('/')}`}));}));items=results.flat();}for(const item of items){const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(provider+username+item.externalId));const id='activity:'+Array.from(new Uint8Array(digest)).map(v=>v.toString(16).padStart(2,'0')).join('');await put(owner,id,'activity',{...item,provider,username});}const connection=await put(owner,'connection:'+provider,'connection',{provider,username,lastSync:new Date().toISOString(),count:items.length,scope:'public'});return {connection,count:items.length};}
@@ -21,7 +40,7 @@ async function chat(owner:string,data:unknown){
  if(input.photoIds.some(id=>!records.some(r=>r.id===id&&r.kind==='photo')))throw new HttpError(400,'有照片已经删除，请重新选择');
  if(!records.some(r=>r.id===input.id))await put(owner,input.id,'message',{role:'user',text:input.text,photoIds:input.photoIds,mode:input.mode});
  const prior=await one(owner,'reply:'+input.id);if(prior)return {reply:publicEntry(prior),aiReady:true};
- if(!environment().OPENAI_API_KEY)return {saved:true,aiReady:false,notice:'消息已保存。真正的聊天和照片分析还需要连接 AI 服务；你现在可以填写档案、记日记、上传照片和管理任务。'};
+ if(!environment().OPENAI_API_KEY)return {saved:true,aiReady:false,notice:'消息已保存到网站。要用当前 ChatGPT 回答，请在 ChatGPT 桌面端打开本站，然后回到 ChatGPT 对话中继续；可以让它读取记录并保存安排。这里不会自动转发消息。'};
  if(!profile?.aiConsent)return {saved:true,aiReady:true,needsConsent:true,notice:'消息已保存。请在“认识我”中选择是否允许把对话所需的资料发送给 AI。'};
  const now=Date.now(),count=await environment().DB.prepare('SELECT COUNT(*) AS n FROM chat_requests WHERE owner = ? AND created_at > ?').bind(owner,now-60000).first<{n:number}>();if((count?.n||0)>=10)throw new HttpError(429,'刚刚聊得有点快，请一分钟后再试');
  await environment().DB.prepare('INSERT OR IGNORE INTO chat_requests (owner, id, created_at) VALUES (?, ?, ?)').bind(owner,crypto.randomUUID(),now).run();
@@ -46,6 +65,8 @@ export async function handle(req:Request){try{
  if(req.method==='GET'&&path==='bootstrap')return json({records:(await all(owner)).map(publicEntry),aiReady:!!environment().OPENAI_API_KEY});
  if(req.method==='PUT'&&path==='records'){const input=recordInput.parse(await body(req));const data=parseRecord(input.kind,input.data);if(input.kind==='profile'&&input.id!=='profile')throw new HttpError(400,'档案标识无效');return json({record:await put(owner,input.id,input.kind,data,input.revision)});}
  if(req.method==='POST'&&path==='chat')return json(await chat(owner,await body(req)));
+ if(req.method==='POST'&&path==='assistant/tasks')return json(await assistantTasks(owner,await body(req)));
+ if(req.method==='POST'&&path==='assistant/exchange')return json(await assistantExchange(owner,await body(req)));
  if(req.method==='POST'&&path==='sync')return json(await sync(owner,await body(req)));
  if(req.method==='POST'&&path==='photos'){
   if(!environment().BUCKET)throw new HttpError(503,'照片存储暂时不可用');if(Number(req.headers.get('content-length')||0)>8*1024*1024)throw new HttpError(413,'照片需小于 8 MB');
